@@ -7,6 +7,9 @@ DAYBACK is an AI-powered historical memory archive that transforms an event into
 
 Instead of another page of search results, DAYBACK gives history a place to live.
 
+Live demo · DEV Challenge post · GitHub repository
+<!-- TODO: Replace the two # links above with the live demo and DEV post URLs when available. -->
+
 ## The Experience
 
 <img width="1405" height="802" alt="image" src="https://github.com/user-attachments/assets/cc80638e-bc21-4cac-b766-6b53ae8934ce" />

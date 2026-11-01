@@ -333,17 +333,17 @@ export default function Home() {
             <div className="voices-state voices-state-muted">
               <strong>{socialArchive?.integrations.serpApi ? 'No suitable public fragments were found.' : 'Social discovery is not configured yet.'}</strong>
               <p>{socialArchive?.integrations.serpApi ? 'The curator did not find enough relevant public posts to preserve. Try a more specific event title.' : 'Add SERPAPI_API_KEY to your local environment to enable Reddit and X discovery. The existing archive works without it.'}</p>
-              {socialArchive?.warnings.map((warning) => <small key={warning}>{warning}</small>)}
+              {socialArchive?.warnings.map((warning, index) => <small key={`${index}-${warning}`}>{warning}</small>)}
             </div>
           )}
-          {socialArchive?.warnings.length ? <div className="voices-warnings">{socialArchive.warnings.map((warning) => <small key={warning}>{warning}</small>)}</div> : null}
+          {socialArchive?.warnings.length ? <div className="voices-warnings">{socialArchive.warnings.map((warning, index) => <small key={`${index}-${warning}`}>{warning}</small>)}</div> : null}
         </section>
 
         <details className="research-details"><summary>Research notes & collection details <span>{result.queries.length} queries · {result.warnings.length} notes</span></summary>
           <div className="research-detail-content">
             <div className="integration-line"><span className={result.integrations.serpApi ? 'on' : ''}>SerpApi {result.integrations.serpApi ? 'connected' : 'not configured'}</span><span className={result.integrations.youtube ? 'on' : ''}>YouTube API {result.integrations.youtube ? 'connected' : 'not configured'}</span><span>{result.resolverMode === 'qwen3' ? 'Qwen3 resolver' : 'Fallback resolver'}</span></div>
             <div className="query-list">{result.queries.map((q, i) => <div className="query-row" key={`${q.platform}-${q.phase}-${i}`}><span>{q.platform}</span><span>{q.phase}</span><p>{q.query}</p></div>)}</div>
-            {result.warnings.map((warning) => <p className="warning-note" key={warning}>{warning}</p>)}
+            {result.warnings.map((warning, index) => <p className="warning-note" key={`${index}-${warning}`}>{warning}</p>)}
           </div>
         </details>
       </section>}

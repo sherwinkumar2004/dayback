@@ -30,6 +30,6 @@ Required JSON shape:
   "resolutionNote": string
 }
 
-Dates must be ISO YYYY-MM-DD. For a single-day event, start and end dates may be equal. For an event that spans multiple days, use its meaningful start and end dates. Distinguish the event date from later anniversaries or retrospectives. Treat the user's wording as a search intent, not as proof that every detail is correct.`,
+Dates must be ISO YYYY-MM-DD. For a single-day event, start and end dates may be equal. For an event that spans multiple days, use its meaningful start and end dates. Distinguish the event date from later anniversaries or retrospectives. Treat the user's wording as a search intent, not as proof that every detail is correct. Prefer a few high-confidence aliases and context terms over long keyword lists. Include entities directly involved in the event; do not add loosely associated people merely to broaden search. If multiple events could match, preserve uncertainty and lower confidence rather than guessing.`,
   model: ollama(modelName),
 });

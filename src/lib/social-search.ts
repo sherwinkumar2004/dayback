@@ -31,7 +31,7 @@ function cleanUrl(value?: string): string | null {
   }
 }
 
-async function searchPlatform(platform: 'reddit' | 'x', eventTitle: string): Promise<SocialCandidateInput[]> {
+async function searchPlatform(platform: 'reddit' | 'x', searchTerm: string, queryIndex: number): Promise<SocialCandidateInput[]> {
   const key = process.env.SERPAPI_API_KEY;
   if (!key) return [];
 
@@ -42,7 +42,7 @@ async function searchPlatform(platform: 'reddit' | 'x', eventTitle: string): Pro
   const params = new URLSearchParams({
     engine: 'google',
     api_key: key,
-    q: `${siteQuery}${eventTitle} ${intent}`,
+    q: `${siteQuery}${searchTerm} ${intent}`,
     num: '10',
   });
 
@@ -61,7 +61,7 @@ async function searchPlatform(platform: 'reddit' | 'x', eventTitle: string): Pro
     const validX = platform === 'x' && (parsed.hostname === 'x.com' || parsed.hostname === 'twitter.com') && /\/status\/\d+/i.test(parsed.pathname);
     if (!validReddit && !validX) return [];
     return [{
-      id: `${platform}-${index}-${url}`,
+      id: `${platform}-${queryIndex}-${index}-${url}`,
       title: (item.title ?? 'Untitled social post').replace(/\s+/g, ' ').trim().slice(0, 240),
       url,
       snippet: item.snippet?.replace(/\s+/g, ' ').trim().slice(0, 600) ?? null,
@@ -80,15 +80,25 @@ export async function collectSocialArchive(eventTitle: string) {
     };
   }
 
-  const [redditResult, xResult] = await Promise.allSettled([
-    searchPlatform('reddit', eventTitle),
-    searchPlatform('x', eventTitle),
+  // Search distinct formulations rather than forcing every concept into one query.
+  // Keep the number bounded (three searches per platform) to control latency/cost.
+  const searchTerms = [
+    eventTitle,
+    `${eventTitle} reactions`,
+    `${eventTitle} fans experiences memories`,
+  ];
+  const jobs = searchTerms.flatMap((term, index) => [
+    { platform: 'reddit' as const, term, index },
+    { platform: 'x' as const, term, index },
   ]);
+  const results = await Promise.allSettled(
+    jobs.map((job) => searchPlatform(job.platform, job.term, job.index)),
+  );
   const candidates: SocialCandidateInput[] = [];
-  if (redditResult.status === 'fulfilled') candidates.push(...redditResult.value);
-  else warnings.push(`Reddit discovery failed: ${redditResult.reason instanceof Error ? redditResult.reason.message : 'Unknown error'}`);
-  if (xResult.status === 'fulfilled') candidates.push(...xResult.value);
-  else warnings.push(`X discovery failed: ${xResult.reason instanceof Error ? xResult.reason.message : 'Unknown error'}`);
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') candidates.push(...result.value);
+    else warnings.push(`${jobs[index].platform} discovery failed: ${result.reason instanceof Error ? result.reason.message : 'Unknown error'}`);
+  });
 
   const unique = [...new Map(candidates.map((candidate) => [candidate.url, candidate])).values()];
   if (unique.length === 0) {

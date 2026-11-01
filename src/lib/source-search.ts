@@ -53,6 +53,19 @@ function normalizeResultUrl(raw: string | undefined): string | null {
   }
 }
 
+/** Reddit discussions belong in the separate Voices Archive, not the main source tiles. */
+function isRedditDiscussionUrl(raw: string): boolean {
+  try {
+    const hostname = new URL(raw).hostname.toLowerCase().replace(/^www\./, '');
+    return hostname === 'reddit.com'
+      || hostname.endsWith('.reddit.com')
+      || hostname === 'redd.it'
+      || hostname.endsWith('.redd.it');
+  } catch {
+    return false;
+  }
+}
+
 function decodeCommonEntities(value: string): string {
   return value
     .replace(/&amp;/g, '&')
@@ -80,7 +93,7 @@ async function searchSerpApi(query: ResearchQuery): Promise<DiscoveredSource[]> 
   const site = query.platform === 'x' ? 'site:x.com OR site:twitter.com'
     : query.platform === 'instagram' ? 'site:instagram.com'
     : '';
-  const params = new URLSearchParams({ engine: 'google', api_key: key, q: `${site} ${query.query}`.trim(), num: '8' });
+  const params = new URLSearchParams({ engine: 'google', api_key: key, q: `${site} ${query.query}`.trim(), num: '10' });
   if (query.platform === 'news') params.set('tbm', 'nws');
   const tbs = dateFilter(query.dateFrom, query.dateTo);
   if (tbs) params.set('tbs', tbs);
@@ -103,6 +116,11 @@ async function searchSerpApi(query: ResearchQuery): Promise<DiscoveredSource[]> 
   return resultItems.flatMap((item) => {
     const url = normalizeResultUrl(item.link);
     if (!url) return [];
+    // Keep Reddit posts exclusively in the separately curated Voices Archive.
+    // This prevents broad Google organic results from surfacing low-relevance
+    // Reddit discussions as ordinary web/news tiles. Dedicated social search
+    // in social-search.ts is intentionally unchanged.
+    if (isRedditDiscussionUrl(url)) return [];
     return [{
     title: decodeCommonEntities(item.title ?? url),
     url,
@@ -129,15 +147,46 @@ type YouTubeSearchResponse = {
   }>;
 };
 
+async function searchYouTubeViaSerpApi(query: ResearchQuery): Promise<DiscoveredSource[]> {
+  const key = process.env.SERPAPI_API_KEY;
+  if (!key) return [];
+  const params = new URLSearchParams({ engine: 'youtube', api_key: key, search_query: query.query });
+  const response = await fetch(`https://serpapi.com/search.json?${params.toString()}`, {
+    signal: AbortSignal.timeout(15000),
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(`SerpApi YouTube fallback returned ${response.status}`);
+  const data = await response.json() as {
+    video_results?: Array<{ title?: string; link?: string; description?: string; published_date?: string; thumbnail?: string | { static?: string } }>;
+  };
+  return (data.video_results ?? []).flatMap((item) => {
+    const url = normalizeResultUrl(item.link);
+    if (!url || !/youtube\.com\/watch|youtu\.be\//i.test(url)) return [];
+    const thumbnail = typeof item.thumbnail === 'string' ? item.thumbnail : item.thumbnail?.static;
+    return [{
+      title: decodeCommonEntities(item.title ?? url),
+      url,
+      snippet: item.description ? decodeCommonEntities(item.description).slice(0, 400) : null,
+      platform: 'youtube',
+      phase: query.phase,
+      // Search-engine dates are not treated as verified publication timestamps.
+      publishedAt: null,
+      thumbnailUrl: normalizeResultUrl(thumbnail),
+      verificationStatus: 'unverified' as const,
+    }];
+  });
+}
+
 async function searchYouTube(query: ResearchQuery): Promise<DiscoveredSource[]> {
   const key = process.env.YOUTUBE_API_KEY;
-  if (!key || query.platform !== 'youtube') return [];
+  if (query.platform !== 'youtube') return [];
+  if (!key) return searchYouTubeViaSerpApi(query);
 
   const params = new URLSearchParams({
     key,
     part: 'snippet',
     type: 'video',
-    maxResults: '8',
+    maxResults: '10',
     order: 'relevance',
     q: query.query,
   });
@@ -148,7 +197,16 @@ async function searchYouTube(query: ResearchQuery): Promise<DiscoveredSource[]> 
     signal: AbortSignal.timeout(15000),
     headers: { Accept: 'application/json' },
   });
-  if (!response.ok) throw new Error(`YouTube Data API returned ${response.status}`);
+  if (!response.ok) {
+    const details = await response.text();
+    const quotaLimited = response.status === 429
+      || (response.status === 403 && /quotaExceeded|rateLimitExceeded|userRateLimitExceeded/i.test(details));
+    if (quotaLimited && process.env.SERPAPI_API_KEY) {
+      console.warn(`[DAYBACK] YouTube Data API limited (${response.status}); using SerpApi YouTube fallback.`);
+      return searchYouTubeViaSerpApi(query);
+    }
+    throw new Error(`YouTube Data API returned ${response.status}${details ? `: ${details.slice(0, 180)}` : ''}`);
+  }
   const data = await response.json() as YouTubeSearchResponse;
 
   return (data.items ?? []).flatMap((item) => {
@@ -172,21 +230,38 @@ export async function collectSources(queries: ResearchQuery[]) {
   const hasSerpApi = Boolean(process.env.SERPAPI_API_KEY);
   const hasYouTube = Boolean(process.env.YOUTUBE_API_KEY);
   if (!hasSerpApi) warnings.push('SERPAPI_API_KEY is missing: web, X, Instagram and news discovery were planned but not executed.');
-  if (!hasYouTube) warnings.push('YOUTUBE_API_KEY is missing: YouTube discovery was planned but not executed.');
+  if (!hasYouTube && !hasSerpApi) warnings.push('YOUTUBE_API_KEY and SERPAPI_API_KEY are missing: YouTube discovery was planned but not executed.');
 
-  const selectedQueries = queries.slice(0, 7);
-  const batches = await Promise.all(selectedQueries.map(async (query) => {
+  // The planner emits a bounded set of diverse, platform-specific queries.
+  // Keep a defensive cap so malformed callers cannot trigger unbounded API use.
+  // Keep a single event from fanning out into many costly YouTube search.list
+  // calls. SerpApi remains the fallback when the YouTube quota/rate limit is hit.
+  const selectedQueries = queries.slice(0, 16);
+  const youtubeQueries = selectedQueries.filter((query) => query.platform === 'youtube').slice(0, 2);
+  const otherQueries = selectedQueries.filter((query) => query.platform !== 'youtube');
+  // Keep non-YouTube providers parallel, but serialize YouTube search.list
+  // requests to avoid burst rate limits. Each YouTube query can fall back to
+  // SerpApi if the official API quota or rate limit is exhausted.
+  const otherBatches = await Promise.all(otherQueries.map(async (query) => {
     try {
-      if (query.platform === 'youtube') return await searchYouTube(query);
       return await searchSerpApi(query);
     } catch (error) {
       warnings.push(`${query.platform}/${query.phase} search failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return [];
     }
   }));
+  const youtubeBatches: DiscoveredSource[][] = [];
+  for (const query of youtubeQueries) {
+    try {
+      youtubeBatches.push(await searchYouTube(query));
+    } catch (error) {
+      warnings.push(`${query.platform}/${query.phase} search failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      youtubeBatches.push([]);
+    }
+  }
 
   const unique = new Map<string, DiscoveredSource>();
-  for (const source of batches.flat()) {
+  for (const source of [...otherBatches, ...youtubeBatches].flat()) {
     if (!unique.has(source.url)) unique.set(source.url, source);
   }
 

@@ -137,16 +137,17 @@ const planResearchStep = createStep({
   }),
   execute: async ({ inputData }) => {
     const brief = inputData.eventBrief;
-    const subject = [brief.canonicalTitle, ...brief.searchAliases.slice(0, 2)].filter(Boolean).join(' OR ');
-    const people = brief.keyPeopleOrEntities.slice(0, 4).join(' ');
-    const keywords = brief.contextKeywords.slice(0, 4).join(' ');
+    const title = brief.canonicalTitle.trim();
+    const aliases = brief.searchAliases.filter(Boolean).slice(0, 4);
+    const people = brief.keyPeopleOrEntities.filter(Boolean).slice(0, 4);
+    const keywords = brief.contextKeywords.filter(Boolean).slice(0, 4);
     const start = brief.eventStartDate;
     const end = brief.eventEndDate ?? start;
     const windows = start && end
       ? {
           anticipation: { from: addDays(start, -14), to: addDays(start, -1) },
           event: { from: start, to: end },
-          aftermath: { from: addDays(end, 1), to: addDays(end, 3) },
+          aftermath: { from: addDays(end, 1), to: addDays(end, 30) },
           retrospective: { from: addDays(end, 30), to: null },
         }
       : {
@@ -156,20 +157,29 @@ const planResearchStep = createStep({
           retrospective: { from: null, to: null },
         };
 
+    // Keep queries independent: overly long AND-like keyword combinations hide
+    // relevant posts whose titles use different wording from the event brief.
     const definitions = [
-      { platform: 'x' as const, phase: 'anticipation' as const, suffix: 'predictions expectations fans', window: windows.anticipation },
-      { platform: 'x' as const, phase: 'event' as const, suffix: 'live reactions posts', window: windows.event },
-      { platform: 'instagram' as const, phase: 'aftermath' as const, suffix: 'celebration reaction fan edit', window: windows.aftermath },
-      { platform: 'youtube' as const, phase: 'event' as const, suffix: 'live reaction highlights published', window: windows.event },
-      { platform: 'youtube' as const, phase: 'aftermath' as const, suffix: 'fan celebrations reactions', window: windows.aftermath },
-      { platform: 'news' as const, phase: 'aftermath' as const, suffix: 'news headlines newspaper front pages reaction', window: windows.aftermath },
-      { platform: 'web' as const, phase: 'retrospective' as const, suffix: 'documentary anniversary oral history', window: windows.retrospective },
+      { platform: 'x' as const, phase: 'event' as const, query: title, window: windows.event },
+      { platform: 'x' as const, phase: 'aftermath' as const, query: `${title} reactions`, window: windows.aftermath },
+      { platform: 'x' as const, phase: 'retrospective' as const, query: `${title} memories OR anniversary`, window: windows.retrospective },
+      { platform: 'instagram' as const, phase: 'aftermath' as const, query: `${title} celebration reaction`, window: windows.aftermath },
+      { platform: 'instagram' as const, phase: 'retrospective' as const, query: `${title} photos memories`, window: windows.retrospective },
+      { platform: 'youtube' as const, phase: 'event' as const, query: `${title} highlights reaction`, window: { from: null, to: null } },
+      { platform: 'youtube' as const, phase: 'aftermath' as const, query: `${title} fans celebrations`, window: { from: null, to: null } },
+      { platform: 'youtube' as const, phase: 'retrospective' as const, query: `${title} documentary interview`, window: { from: null, to: null } },
+      { platform: 'news' as const, phase: 'event' as const, query: `${title} coverage`, window: windows.event },
+      { platform: 'news' as const, phase: 'aftermath' as const, query: `${title} public reaction consequences`, window: windows.aftermath },
+      { platform: 'news' as const, phase: 'retrospective' as const, query: `${title} retrospective anniversary`, window: windows.retrospective },
+      { platform: 'web' as const, phase: 'retrospective' as const, query: `${title} oral history documentary`, window: windows.retrospective },
+      ...(aliases.length ? [{ platform: 'news' as const, phase: 'aftermath' as const, query: aliases[0], window: windows.aftermath }] : []),
+      ...(people.length ? [{ platform: 'youtube' as const, phase: 'aftermath' as const, query: `${people.slice(0, 2).join(' ')} ${keywords.slice(0, 2).join(' ')} reactions`, window: { from: null, to: null } }] : []),
     ];
 
     const queries = definitions.map((item) => ({
       platform: item.platform,
       phase: item.phase,
-      query: [subject, people, keywords, item.suffix].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim(),
+      query: item.query.replace(/\s+/g, ' ').trim(),
       dateFrom: item.window.from,
       dateTo: item.window.to,
     }));

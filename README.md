@@ -98,3 +98,21 @@ The initial schema is in `supabase/schema.sql`. Database persistence is intentio
 ## Notes
 
 Never represent an AI-generated reconstruction as an original historical post. Preserve original timestamps separately from retrieval timestamps, link to original sources, and respect platform terms and copyright.
+
+
+## Retrieval quality and model tuning
+
+The research workflow uses a bounded set of independent, platform-specific queries rather than combining the event title, people, aliases, and every context keyword into one restrictive query. Source searches run concurrently. The planner currently emits up to 14 queries and the source collector has a defensive 16-query cap; SerpApi and YouTube requests ask for up to 10 results per query. Historical YouTube searches intentionally do not apply the event's original publication date, since relevant reaction videos and retrospectives are often uploaded later.
+
+Social discovery runs three distinct query formulations against Reddit and X in parallel (six bounded searches total). Social curation can return up to 20 candidates rather than limiting the archive to eight. The local fallback uses partial event-term coverage so posts that do not repeat the complete canonical title are not automatically discarded.
+
+The Ollama model remains configurable through `OLLAMA_MODEL`; no new model or dependency is required. To benchmark a Gemma model, install it in your Ollama environment and change `OLLAMA_MODEL` in `.env.local`. The default remains `qwen3:4b` so existing installations continue to work. Changing the model does not change the API or workflow contracts.
+
+These retrieval changes improve query diversity and candidate recall, but they do not provide a true semantic embedding reranker. That should be introduced only after measuring latency and relevance on a labelled event benchmark, and ideally as an optional stage so an embedding-service outage cannot break source retrieval. Search provider coverage and rate limits still determine the actual number of results returned.
+
+### Reddit placement in the archive
+
+Reddit discussions are collected by the dedicated Voices Archive workflow. The
+main source collector filters Reddit and `redd.it` destinations from general
+web/news results so broad organic search results cannot appear as main archive
+tiles. The dedicated Reddit search and curation path is unchanged.
